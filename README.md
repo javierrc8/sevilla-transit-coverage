@@ -48,16 +48,42 @@ docker-compose up -d
 
 ## Roadmap
 
-- [ ] Fase 0 — Estructura del repo y entorno Docker
-- [ ] Fase 1 — Extracción del feed GTFS (CTAN API → S3)
+- [x] Fase 0 — Estructura del repo y entorno Docker
+- [x] Fase 1 — Extracción del feed GTFS (CTAN API → S3/MinIO)
 - [ ] Fase 2 — Carga a staging
 - [ ] Fase 3 — Modelado dbt (staging → marts)
 - [ ] Fase 4 — Orquestación con Airflow
 - [ ] Fase 5 — Dashboard con Streamlit
 
+## Cómo ejecutar la extracción
+
+```bash
+docker-compose up -d minio
+cd extract
+pip install -r requirements.txt
+cp ../.env.example ../.env   # si no lo has hecho ya
+python extract_gtfs.py                      # extrae para la fecha de hoy
+python extract_gtfs.py --date 2026-08-01     # backfill de una fecha concreta
+python extract_gtfs.py --force               # sobrescribe si ya existe
+```
+
+Puedes ver el fichero subido en la consola web de MinIO: http://localhost:9001 (usuario/contraseña definidos en `.env`).
+
 ## Decisiones técnicas
 
-_(Se irá documentando el "por qué" de cada decisión a medida que avanza el proyecto)_
+### Fase 1 — Extracción
+
+**El feed de CTAN es unificado, no filtramos en la extracción.**
+La API de CTAN (`https://api.ctan.es/v1/datos/UNIFICADO/gtfs.zip`) sirve un único ZIP con los 9 consorcios de transporte de Andalucía, no uno específico de Sevilla. Se decidió **no filtrar por operador (TUSSAM) en esta fase**, sino subir el ZIP completo tal cual a la capa raw. El filtrado a TUSSAM ocurre en la Fase 2 (carga a staging). Motivo: el raw layer debe ser una copia fiel de la fuente en el momento de la extracción — cualquier decisión de negocio (qué operador nos interesa) puede cambiar con el tiempo, y si está "cocinada" dentro del raw, perdemos la capacidad de reprocesar sin volver a golpear la API.
+
+**Particionado por fecha de extracción (`dt=YYYY-MM-DD`).**
+Cada ejecución escribe en una key distinta de S3 (`raw/gtfs/dt=2026-08-06/gtfs.zip`), nunca sobrescribe un día anterior. Esto permite: (a) llevar histórico para detectar cambios en el feed día a día, (b) reprocesar un día concreto sin afectar a los demás, y (c) que el pipeline sea idempotente — condición necesaria para que Airflow pueda reintentar una tarea fallida sin duplicar datos.
+
+**MinIO en vez de S3 real para desarrollo local.**
+Mismo razonamiento que Postgres frente a Snowflake: un portfolio público tiene que poder clonarse y ejecutarse sin depender de una cuenta AWS activa. MinIO expone una API compatible con S3, así que el código de `extract_gtfs.py` usa `boto3` de forma idéntica en ambos casos — solo cambia la variable de entorno `S3_ENDPOINT_URL`. En producción real, bastaría con vaciar esa variable para que boto3 apunte a AWS.
+
+**Validación "barata" en la extracción, no de calidad de datos.**
+El script valida que el ZIP no esté corrupto y que contenga los ficheros GTFS mínimos esperados (`stops.txt`, `routes.txt`, etc.) — es una validación estructural para detectar fallos de la fuente (API caída, cambio de formato) antes de subir nada. La validación de calidad de datos real (nulls, integridad referencial `trip_id`, rangos horarios válidos) se hace con tests de dbt en la Fase 3, no aquí — cada capa valida lo que le corresponde.
 
 ## Autor
 

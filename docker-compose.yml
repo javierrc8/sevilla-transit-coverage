@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # Sustituto local de Snowflake. Actúa como staging warehouse para dbt.
   # Se documenta en el README cómo se adaptaría el código de staging a Snowflake en producción.
@@ -21,8 +19,31 @@ services:
       timeout: 5s
       retries: 5
 
+  # Sustituto local de S3 (compatible con la API de S3 vía boto3).
+  # Permite que la capa raw del pipeline funcione sin depender de una
+  # cuenta AWS real, igual que Postgres sustituye a Snowflake.
+  minio:
+    image: minio/minio:latest
+    container_name: sevilla_transit_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # Consola web (http://localhost:9001)
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # Placeholder: Airflow se añadirá en la Fase 4 (webserver + scheduler + metadata db)
   # Placeholder: Streamlit se añadirá en la Fase 5
 
 volumes:
   postgres_data:
+  minio_data:
