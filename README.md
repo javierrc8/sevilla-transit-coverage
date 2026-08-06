@@ -1,8 +1,8 @@
 # Sevilla Transit Coverage
 
-Pipeline de datos end-to-end que analiza la cobertura y frecuencia del transporte público urbano de Sevilla (TUSSAM), para responder a la pregunta:
+Pipeline de datos end-to-end que analiza la cobertura y frecuencia de la **red interurbana metropolitana de Sevilla** (líneas gestionadas por el Consorcio de Transporte Metropolitano del Área de Sevilla — CTAN, `agency_id = CTMAS`), para responder a la pregunta:
 
-> **¿Qué zonas de la ciudad están peor comunicadas por transporte público, y cómo cambia el servicio entre semana y fin de semana?**
+> **¿Qué municipios y zonas del área metropolitana de Sevilla están peor comunicados con la capital por transporte público, y cómo cambia el servicio entre semana y fin de semana?**
 
 ## Estado del proyecto
 
@@ -25,11 +25,13 @@ Python (extract del ZIP GTFS vía API de CTAN)
   → Streamlit (dashboard final: mapa de frecuencia por parada)
 ```
 
-> Nota de diseño: para que el proyecto sea ejecutable de forma indefinida (portfolio público, sin depender de trials de cloud que caducan), el pipeline corre localmente con Docker usando Postgres como data warehouse. El código de staging está pensado para ser portable a Snowflake en un entorno de producción real — se detalla en la sección de [Decisiones técnicas](#decisiones-técnicas).
+> Nota de diseño: para que el proyecto sea ejecutable de forma indefinida (portfolio público, sin depender de trials de cloud que caducan), el pipeline corre localmente con Docker usando Postgres como data warehouse y MinIO como almacenamiento S3-compatible. El código está pensado para ser portable a Snowflake/S3 real en un entorno de producción — se detalla en la sección de [Decisiones técnicas](#decisiones-técnicas).
 
 ## Alcance
 
-Este proyecto cubre únicamente la red urbana de autobuses de Sevilla capital (**TUSSAM**), excluyendo metro, tranvía, cercanías y líneas interurbanas. Fue una decisión deliberada para priorizar un pipeline completo y funcionando end-to-end frente a cobertura exhaustiva de todos los operadores del Consorcio de Transporte de Sevilla.
+Este proyecto cubre la **red interurbana metropolitana de Sevilla**: las líneas gestionadas bajo `agency_id = CTMAS` en el feed GTFS de CTAN (112 líneas que conectan Sevilla capital con municipios como Dos Hermanas, Alcalá de Guadaíra, Mairena del Aljarafe, Bormujos, Camas, Carmona, etc.).
+
+> **Nota de scope (decisión documentada):** la idea inicial era analizar solo la red urbana de TUSSAM (autobuses dentro de Sevilla capital). Se descartó tras comprobar que TUSSAM no publica su feed GTFS por ningún canal oficial y estable — ver el detalle en [Decisiones técnicas](#decisiones-técnicas). El feed de CTAN, en cambio, es una fuente pública, documentada y con actualización diaria garantizada, por lo que el análisis se centra en la red metropolitana interurbana en su lugar. La pregunta de negocio sigue siendo válida y de hecho gana un ángulo real de movilidad: qué municipios del área metropolitana quedan peor conectados con la capital.
 
 ## Modelo de datos (dbt)
 
@@ -72,6 +74,9 @@ Puedes ver el fichero subido en la consola web de MinIO: http://localhost:9001 (
 ## Decisiones técnicas
 
 ### Fase 1 — Extracción
+
+**Pivote de scope: de TUSSAM urbano a red metropolitana interurbana (CTAN).**
+El plan inicial era analizar solo TUSSAM (autobuses urbanos de Sevilla capital). Al inspeccionar el feed real de CTAN se comprobó que: (1) el feed es unificado para los 9 consorcios de Andalucía, y (2) dentro del consorcio de Sevilla (`agency_id = CTMAS`), las 112 líneas presentes siguen todas el patrón `M-xxx`, es decir, son líneas **interurbanas metropolitanas** — TUSSAM no aparece en este feed en absoluto. Investigando el ecosistema de datos abiertos de Sevilla se confirmó que TUSSAM no publica su feed GTFS por ningún canal oficial (fuente: TFG de la Universidad de Sevilla sobre datos abiertos de transporte, que documenta explícitamente esta carencia). Ante esto, se decidió pivotar el scope del proyecto a la red metropolitana interurbana de CTAN: es una fuente pública, documentada y con garantía de actualización diaria, y la pregunta de negocio ("¿qué zonas están peor comunicadas?") sigue siendo válida aplicada a los municipios del área metropolitana en vez de a los barrios de la capital. Esta decisión se tomó **antes** de construir el modelo dbt, precisamente para evitar rehacer el modelado dimensional a mitad de proyecto.
 
 **El feed de CTAN es unificado, no filtramos en la extracción.**
 La API de CTAN (`https://api.ctan.es/v1/datos/UNIFICADO/gtfs.zip`) sirve un único ZIP con los 9 consorcios de transporte de Andalucía, no uno específico de Sevilla. Se decidió **no filtrar por operador (TUSSAM) en esta fase**, sino subir el ZIP completo tal cual a la capa raw. El filtrado a TUSSAM ocurre en la Fase 2 (carga a staging). Motivo: el raw layer debe ser una copia fiel de la fuente en el momento de la extracción — cualquier decisión de negocio (qué operador nos interesa) puede cambiar con el tiempo, y si está "cocinada" dentro del raw, perdemos la capacidad de reprocesar sin volver a golpear la API.
