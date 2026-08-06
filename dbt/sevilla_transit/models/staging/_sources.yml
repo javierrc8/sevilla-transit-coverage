@@ -1,0 +1,26 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Copia sin transformar del feed GTFS de CTAN, cargada por
+      load_staging.py. Todas las columnas son texto (VARCHAR); el tipado
+      real ocurre en los modelos de staging de dbt.
+    tables:
+      - name: agency
+        description: Consorcios de transporte de Andalucía (9 filas, una por área metropolitana).
+      - name: routes
+        description: Líneas de transporte de los 9 consorcios. Se filtra a Sevilla (CTMAS) en stg_routes.
+      - name: trips
+        description: Viajes concretos de cada línea, ligados a un servicio de calendario.
+      - name: stop_times
+        description: Hora de paso de cada viaje por cada parada. La tabla más grande del feed.
+      - name: stops
+        description: Paradas físicas (id, nombre, coordenadas).
+      - name: calendar
+        description: Días de la semana en que opera cada servicio (laborable/finde).
+      - name: calendar_dates
+        description: Excepciones puntuales al calendario (festivos, servicios especiales).
+      - name: shapes
+        description: Puntos de trazado geográfico de cada línea (para dibujar rutas en el mapa).

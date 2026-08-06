@@ -1,0 +1,34 @@
+name: 'sevilla_transit'
+version: '1.0.0'
+config-version: 2
+
+profile: 'sevilla_transit'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  sevilla_transit:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+
+# agency_id de Sevilla en el feed unificado de CTAN. Se parametriza aquí,
+# no se hardcodea en el SQL, para que cambiar de scope (o ampliarlo a más
+# consorcios en el futuro) sea un cambio de una línea, no una reescritura
+# de modelos.
+vars:
+  sevilla_agency_id: 'CTMAS'

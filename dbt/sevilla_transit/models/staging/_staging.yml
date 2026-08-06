@@ -1,0 +1,108 @@
+version: 2
+
+models:
+  - name: stg_routes
+    description: >
+      Líneas interurbanas metropolitanas de Sevilla (agency_id = CTMAS),
+      tipadas a partir de raw.routes.
+    columns:
+      - name: route_id
+        description: Identificador único de la línea en el feed GTFS.
+        tests:
+          - unique
+          - not_null
+
+      - name: agency_id
+        description: Debe ser siempre CTMAS — es la garantía de que el filtro de scope funciona.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CTMAS']
+
+      - name: route_type
+        description: >
+          Tipo de vehículo según el estándar GTFS. 3 = autobús. Todas las
+          líneas de este consorcio deberían ser de tipo 3; si aparece otro
+          valor, merece revisión (¿ha entrado una línea de otro modo de
+          transporte?).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [3]
+
+  - name: stg_trips
+    description: Viajes concretos de las líneas de Sevilla, uno por salida programada.
+    columns:
+      - name: trip_id
+        tests:
+          - unique
+          - not_null
+      - name: route_id
+        description: Debe existir siempre en stg_routes — lo garantiza el INNER JOIN del modelo, pero se testea igualmente.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_routes')
+                field: route_id
+      - name: service_id
+        tests:
+          - not_null
+
+  - name: stg_stop_times
+    description: Hora de paso de cada viaje por cada parada.
+    columns:
+      - name: trip_id
+        description: >
+          Integridad referencial trip_id entre stop_times y trips
+          (requisito mínimo definido en el alcance del proyecto).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_trips')
+                field: trip_id
+      - name: stop_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_stops')
+                field: stop_id
+      - name: stop_sequence
+        tests:
+          - not_null
+
+  - name: stg_stops
+    description: Paradas físicas de la red de Sevilla, con coordenadas.
+    columns:
+      - name: stop_id
+        tests:
+          - unique
+          - not_null
+      - name: stop_name
+        tests:
+          - not_null
+      - name: stop_lat
+        description: "Paradas sin coordenadas nulas (requisito mínimo definido en el alcance del proyecto)."
+        tests:
+          - not_null
+      - name: stop_lon
+        tests:
+          - not_null
+
+  - name: stg_calendar
+    description: Calendario de operación de cada servicio (qué días de la semana circula).
+    columns:
+      - name: service_id
+        tests:
+          - unique
+          - not_null
+      - name: start_date
+        tests:
+          - not_null
+      - name: end_date
+        tests:
+          - not_null

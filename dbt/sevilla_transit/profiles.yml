@@ -1,0 +1,22 @@
+# profiles.yml
+#
+# No contiene credenciales: todo se lee de variables de entorno (las mismas
+# que ya usa el resto del pipeline en .env), vía env_var(). Por eso este
+# fichero SÍ está versionado en el repo — no hay nada sensible que ocultar.
+#
+# dbt busca este fichero en ~/.dbt/profiles.yml por defecto. Para no
+# duplicarlo fuera del repo, indicamos su ubicación real con la variable de
+# entorno DBT_PROFILES_DIR (ver README, sección "Cómo ejecutar dbt").
+
+sevilla_transit:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      user: "{{ env_var('POSTGRES_USER', 'sevilla') }}"
+      pass: "{{ env_var('POSTGRES_PASSWORD', 'sevilla') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'sevilla_transit') }}"
+      schema: public
+      threads: 4
