@@ -52,8 +52,8 @@ docker-compose up -d
 
 - [x] Fase 0 — Estructura del repo y entorno Docker
 - [x] Fase 1 — Extracción del feed GTFS (CTAN API → S3/MinIO)
-- [ ] Fase 2 — Carga a staging
-- [ ] Fase 3 — Modelado dbt (staging → marts)
+- [x] Fase 2 — Carga a staging (raw layer en Postgres)
+- [x] Fase 3 — Modelado dbt (staging → marts)
 - [ ] Fase 4 — Orquestación con Airflow
 - [ ] Fase 5 — Dashboard con Streamlit
 
@@ -70,6 +70,35 @@ python extract_gtfs.py --force               # sobrescribe si ya existe
 ```
 
 Puedes ver el fichero subido en la consola web de MinIO: http://localhost:9001 (usuario/contraseña definidos en `.env`).
+
+## Cómo ejecutar la carga a staging
+
+```bash
+docker-compose up -d postgres
+cd load
+pip install -r requirements.txt
+python load_staging.py                      # coge la partición más reciente de S3
+python load_staging.py --date 2026-08-01     # carga una fecha concreta
+```
+
+Puedes inspeccionar el resultado conectando a Postgres (`localhost:5432`, credenciales en `.env`) y listando las tablas del esquema `raw`:
+
+```sql
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'raw';
+SELECT agency_id, agency_name FROM raw.agency;
+```
+
+## Cómo ejecutar dbt
+
+```bash
+cd dbt/sevilla_transit
+pip install dbt-postgres
+export DBT_PROFILES_DIR=$(pwd)   # en Windows (PowerShell): $env:DBT_PROFILES_DIR = (Get-Location)
+
+dbt debug     # comprueba la conexión a Postgres
+dbt run       # construye los modelos
+dbt test      # ejecuta los tests
+```
 
 ## Decisiones técnicas
 
@@ -89,6 +118,49 @@ Mismo razonamiento que Postgres frente a Snowflake: un portfolio público tiene 
 
 **Validación "barata" en la extracción, no de calidad de datos.**
 El script valida que el ZIP no esté corrupto y que contenga los ficheros GTFS mínimos esperados (`stops.txt`, `routes.txt`, etc.) — es una validación estructural para detectar fallos de la fuente (API caída, cambio de formato) antes de subir nada. La validación de calidad de datos real (nulls, integridad referencial `trip_id`, rangos horarios válidos) se hace con tests de dbt en la Fase 3, no aquí — cada capa valida lo que le corresponde.
+
+### Fase 2 — Carga a staging
+
+**Patrón ELT: Python solo carga, dbt transforma.**
+`load_staging.py` copia cada `.txt` del GTFS a una tabla `raw.<nombre>` en Postgres **sin filtrar por agencia ni tipar las columnas** — todo se carga como texto (`dtype=str`). El filtro a `agency_id = CTMAS` (Sevilla) y el tipado real de columnas (fechas, floats de lat/long, etc.) se hacen en dbt (Fase 3). Se decidió así porque el filtro a Sevilla no es una operación de una sola tabla: `routes.txt` tiene `agency_id`, pero `stops.txt` y `calendar.txt` no — para filtrarlos hay que atravesar `routes → trips → stop_times → stops`, y ese tipo de lógica declarativa, con dependencias entre modelos y tests automáticos, es exactamente para lo que existe dbt. Meterla en un script Python de carga habría duplicado lógica de negocio en dos sitios distintos del pipeline.
+
+**`dtype=str` en la carga, no inferencia automática de tipos.**
+pandas podría inferir tipos automáticamente (`route_short_name` como int, por ejemplo), pero eso es peligroso con datos GTFS: algunos códigos de línea tienen ceros a la izquierda o mezclan letras y números (`"P.LO"`, `"0110-V"`), y una inferencia de tipo incorrecta en la carga sería un error silencioso. Cargar todo como texto mantiene el esquema `raw` fiel a la fuente byte a byte; si dbt necesita castear algo a `INTEGER` o `FLOAT` y falla, el fallo es visible y explícito, no un dato corrompido sin avisar.
+
+**Selección automática de la partición más reciente en S3.**
+Por defecto, `load_staging.py` lista las particiones `dt=` disponibles en S3 y coge la más reciente, sin necesidad de pasarle una fecha. Esto es importante para la Fase 4: cuando Airflow orqueste `extract → load`, el DAG no necesita coordinar explícitamente qué fecha acaba de extraer el paso anterior — `load_staging.py` simplemente coge "lo último que haya", lo cual simplifica el grafo de dependencias. La opción `--date` se mantiene para reprocesar un día histórico concreto sin tocar el resto.
+
+**Full refresh en `raw`, histórico real vive en S3.**
+Cada ejecución de `load_staging.py` reemplaza el contenido de las tablas `raw.*` (`if_exists='replace'`). Postgres `raw` es solo la copia de trabajo más reciente para transformar — el histórico día a día ya está garantizado por el particionado de S3 (Fase 1). Si en el futuro se necesitara histórico también dentro del warehouse (por ejemplo, para detectar cuándo cambió el horario de una línea), se añadiría con snapshots de dbt, que es la herramienta pensada para eso, no repitiendo la lógica en Python.
+
+### Fase 3 — dbt (en curso)
+
+**`profiles.yml` versionado en el repo, sin credenciales.**
+Normalmente `profiles.yml` vive fuera del repo (`~/.dbt/profiles.yml`) porque suele contener contraseñas. Aquí usa `env_var()` de Jinja para leer las mismas variables de entorno que ya usan `extract_gtfs.py` y `load_staging.py` — no hay ningún secreto en el fichero, así que se puede versionar sin riesgo, y todo el proyecto comparte una única fuente de configuración (`.env`). Se activa apuntando `DBT_PROFILES_DIR` a la carpeta del proyecto dbt en vez de duplicarlo en el home del usuario.
+
+**El filtro de scope (`agency_id = CTMAS`) vive en una variable de dbt, no hardcodeado en SQL.**
+`dbt_project.yml` define `vars: sevilla_agency_id: 'CTMAS'`, y `stg_routes.sql` lo referencia con `{{ var("sevilla_agency_id") }}`. Si el scope del proyecto cambiara (por ejemplo, añadir Cádiz más adelante), es un cambio de una línea en la configuración, no una reescritura de modelos — y queda documentado en un único sitio.
+
+**El test `accepted_values` sobre `agency_id` no es redundante con el `WHERE` del modelo.**
+Puede parecer que testear que `agency_id = 'CTMAS'` es innecesario si el propio modelo ya filtra por eso — pero el test no verifica el filtro en sí, verifica que **nadie rompa el filtro sin darse cuenta** en un cambio futuro (por ejemplo, si alguien edita `stg_routes.sql` y se equivoca en el `WHERE`). Es la diferencia entre "confiar en que el código hace lo que crees" y "tener una alarma automática si deja de hacerlo".
+
+**Las horas GTFS se castean directamente a `INTERVAL`, sin parsear a mano.**
+Postgres interpreta correctamente el formato `HH:MM:SS` de GTFS incluso por encima de 24h (`'25:30:00'::interval` da 25.5 horas, sin error) — se comprobó explícitamente antes de construir `fct_paradas_por_viaje`. Esto evita una trampa común: intentar castear a `TIME` (que sí falla con >24h) o parsear manualmente con funciones de texto cuando no hace falta.
+
+**Esquema en estrella: 3 dimensiones + 1 tabla de hechos.**
+`dim_paradas`, `dim_lineas` y `dim_calendario` son las "entidades" sobre las que se pregunta (quién, qué, cuándo). `fct_paradas_por_viaje` es la tabla de hechos: una fila por cada paso real de un autobús por una parada, con solo IDs apuntando a las dimensiones y las horas ya en `INTERVAL`. Mantenerla "delgada" (sin repetir nombres ni colores) es el propósito central de este patrón: evita duplicar el nombre de una parada en cientos de miles de filas.
+
+**El filtro a Sevilla se propaga en cascada por JOINs, no se repite en cada modelo.**
+`stops.txt` y `calendar.txt` no tienen `agency_id` directamente — no hay forma de filtrarlos "a pelo". En su lugar, cada modelo de staging se une (`INNER JOIN`) al modelo anterior ya filtrado: `stg_trips` se une a `stg_routes`, `stg_stop_times` a `stg_trips`, `stg_stops` a `stg_stop_times`, `stg_calendar` a `stg_trips`. Si un registro no pertenece a la cadena de Sevilla, el JOIN lo descarta solo, sin necesidad de repetir `WHERE agency_id = 'CTMAS'` en cada sitio.
+
+**Definición de la métrica: buses/hora sobre horas con servicio activo, no sobre las 24h del día.**
+`mart_frecuencia_por_parada` calcula `total_pasadas / horas_con_servicio_activo`, contando solo las horas en las que efectivamente pasó al menos un bus. Dividir entre las 24 horas del día habría diluido el dato con la franja de madrugada (donde ninguna parada tiene servicio), ocultando las diferencias reales entre paradas bien y mal comunicadas durante su horario de servicio.
+
+**`laborable` / `fin_de_semana` se calcula desnormalizando el calendario, no asumiendo un día fijo.**
+Un `service_id` de GTFS puede operar varios días de la semana a la vez (p. ej. "Lunes a Viernes"). `int_calendar_day_types` convierte las 7 columnas booleanas de `stg_calendar` en pares `(service_id, day_type)`, permitiendo que un mismo servicio cuente como `laborable` y/o `fin_de_semana` según corresponda — sin necesidad de asumir de antemano qué días concretos tiene cada patrón.
+
+**Validación end-to-end con datos sintéticos antes de ejecutarlo contra datos reales.**
+Antes de dar por bueno el modelo, se construyó una base de datos Postgres efímera con un puñado de filas sintéticas que cubrían deliberadamente los casos límite: una hora por encima de 24h, una parada sin ningún paso de autobús (para comprobar que desaparece del resultado), y una línea de otra provincia (para comprobar que el filtro a `CTMAS` la excluye en toda la cadena). Los 11 modelos y 50 tests se ejecutaron correctamente contra esos datos antes de aplicarlo al feed real — una práctica de ingeniería de software (probar con casos límite conocidos) aplicada a un pipeline de datos.
 
 ## Autor
 

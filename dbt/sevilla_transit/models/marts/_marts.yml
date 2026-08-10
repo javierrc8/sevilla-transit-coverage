@@ -1,0 +1,82 @@
+version: 2
+
+models:
+  - name: dim_paradas
+    description: Dimensión de paradas físicas de la red metropolitana de Sevilla.
+    columns:
+      - name: stop_id
+        tests:
+          - unique
+          - not_null
+      - name: stop_lat
+        tests:
+          - not_null
+      - name: stop_lon
+        tests:
+          - not_null
+
+  - name: dim_lineas
+    description: Dimensión de líneas de la red metropolitana de Sevilla.
+    columns:
+      - name: route_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_calendario
+    description: Dimensión de servicios (patrones semanales de operación).
+    columns:
+      - name: service_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_paradas_por_viaje
+    description: >
+      Tabla de hechos: un registro por cada paso de un autobús por una
+      parada, clasificado por tipo de día (laborable/fin_de_semana).
+    columns:
+      - name: stop_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_paradas')
+                field: stop_id
+      - name: route_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_lineas')
+                field: route_id
+      - name: day_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['laborable', 'fin_de_semana']
+
+  - name: mart_frecuencia_por_parada
+    description: >
+      Mart final: frecuencia media (buses/hora) por parada y tipo de día.
+      Responde directamente a la pregunta de negocio del proyecto.
+    columns:
+      - name: stop_id
+        tests:
+          - not_null
+      - name: day_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['laborable', 'fin_de_semana']
+      - name: buses_por_hora
+        description: >
+          Métrica principal: pasadas_totales / horas_con_servicio_activo.
+          Cuanto más bajo, peor comunicada está la parada en ese tipo de día.
+        tests:
+          - not_null
+      - name: total_pasadas
+        tests:
+          - not_null

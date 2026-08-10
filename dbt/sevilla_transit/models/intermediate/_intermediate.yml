@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: int_calendar_day_types
+    description: >
+      Clasificación de cada service_id como 'laborable' y/o
+      'fin_de_semana', según qué días de la semana opera.
+    columns:
+      - name: service_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_calendar')
+                field: service_id
+      - name: day_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['laborable', 'fin_de_semana']
