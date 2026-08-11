@@ -18,8 +18,10 @@ Decisiones de diseño (ver README para el detalle completo):
   en S3; se puede fijar una fecha concreta con --date para reprocesar un
   día histórico.
 - Full refresh: cada ejecución reemplaza el contenido de las tablas `raw.*`
-  (if_exists='replace'). El histórico real vive en S3 (particionado por
-  fecha); Postgres `raw` es solo la copia de trabajo más reciente para
+  mediante DROP + recreación (con CASCADE, para no chocar con las vistas
+  de staging de dbt que dependen de ellas — ver comentario en
+  load_gtfs_files_to_postgres). El histórico real vive en S3 (particionado
+  por fecha); Postgres `raw` es solo la copia de trabajo más reciente para
   transformar. Si en el futuro se necesita histórico también en el
   warehouse, se añadiría vía snapshots de dbt, no aquí.
 - Columnas de linaje (_source_file, _extraction_date, _loaded_at) para
@@ -190,11 +192,28 @@ def load_gtfs_files_to_postgres(
             df["_extraction_date"] = extraction_date.isoformat()
             df["_loaded_at"] = loaded_at.isoformat()
 
+            # DROP explícito con CASCADE en vez de dejar que to_sql haga un
+            # 'replace' simple. Motivo: los modelos de staging de dbt son
+            # VISTAS que dependen directamente de estas tablas raw (p.ej.
+            # staging.stg_stops depende de raw.stops). Un DROP TABLE sin
+            # CASCADE falla en cuanto existe esa dependencia, con un error
+            # de Postgres (DependentObjectsStillExist). CASCADE arrastra
+            # esas vistas también — lo cual es correcto en este pipeline,
+            # porque el siguiente paso del DAG (dbt run) las reconstruye
+            # de todas formas. Es la misma filosofía de "full refresh"
+            # que ya aplicamos a las tablas: si raw cambia, todo lo que
+            # depende de raw se recalcula desde cero, nunca se actualiza
+            # a medias.
+            with engine.begin() as conn:
+                conn.execute(
+                    text(f"DROP TABLE IF EXISTS {RAW_SCHEMA}.{table_name} CASCADE")
+                )
+
             df.to_sql(
                 name=table_name,
                 schema=RAW_SCHEMA,
                 con=engine,
-                if_exists="replace",
+                if_exists="append",  # la tabla ya no existe (se acaba de borrar), append la crea
                 index=False,
                 chunksize=5000,
             )

@@ -1,3 +1,42 @@
+x-airflow-common: &airflow-common
+  # Un único nombre de imagen explícito para los 4 servicios de Airflow
+  # (init, webserver, scheduler + cualquiera futuro). Sin esto, Docker
+  # Compose construye una imagen distinta por cada nombre de servicio
+  # aunque compartan el mismo Dockerfile — lo que provocó que reconstruir
+  # solo "airflow-init" no actualizara "airflow-webserver"/"scheduler",
+  # que siguieron usando una imagen vieja con un bug ya corregido.
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
+  image: sevilla-transit-airflow:latest
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    # Dentro de la red de Docker, los demás servicios se alcanzan por su
+    # nombre de servicio (postgres, minio), no por localhost. Además, el
+    # puerto interno de un contenedor SIEMPRE es el que declara su propio
+    # servicio (5432 para Postgres), nunca el puerto republicado hacia el
+    # host (5433) — ese mapeo solo existe de cara a tu Windows, no dentro
+    # de la red de contenedores. Estas tres variables sobrescriben lo que
+    # traiga el .env compartido, que está pensado para Windows.
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    S3_ENDPOINT_URL: http://minio:9000
+  env_file:
+    - .env
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - .:/opt/airflow/project
+  depends_on:
+    airflow-postgres:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
 services:
   # Sustituto local de Snowflake. Actúa como staging warehouse para dbt.
   # Se documenta en el README cómo se adaptaría el código de staging a Snowflake en producción.
@@ -44,6 +83,86 @@ services:
   # Placeholder: Airflow se añadirá en la Fase 4 (webserver + scheduler + metadata db)
   # Placeholder: Streamlit se añadirá en la Fase 5
 
+  # --- Airflow: metadatos, orquestación del pipeline ---
+
+  airflow-postgres:
+    image: postgres:16
+    container_name: sevilla_transit_airflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Tarea de un solo uso: prepara la base de datos de metadatos y crea el
+  # usuario admin. Termina y sale (no es un servicio de larga duración).
+  airflow-init:
+    <<: *airflow-common
+    container_name: sevilla_transit_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - >
+        airflow db upgrade &&
+        airflow users create
+        --username admin --password admin
+        --firstname Admin --lastname User
+        --role Admin --email admin@example.com || true
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: sevilla_transit_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: sevilla_transit_airflow_scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # --- Dashboard: visualización final (Fase 5) ---
+  streamlit:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: sevilla_transit_streamlit
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      # app.py montado como volumen (no solo copiado en el build): así los
+      # cambios en el código se reflejan de inmediato al recrear el
+      # contenedor, sin reconstruir la imagen. Streamlit además recarga en
+      # caliente al detectar el cambio del fichero, sin ni siquiera
+      # reiniciar el contenedor en muchos casos.
+      - ./dashboard/app.py:/app/app.py
+    environment:
+      # Mismo razonamiento que en Airflow: dentro de la red de Docker,
+      # Postgres se alcanza por su nombre de servicio y su puerto interno
+      # real (5432), no por localhost:5433 (eso solo existe de cara a Windows).
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   minio_data:
+  airflow_postgres_data:

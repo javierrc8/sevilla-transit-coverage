@@ -54,8 +54,8 @@ docker-compose up -d
 - [x] Fase 1 — Extracción del feed GTFS (CTAN API → S3/MinIO)
 - [x] Fase 2 — Carga a staging (raw layer en Postgres)
 - [x] Fase 3 — Modelado dbt (staging → marts)
-- [ ] Fase 4 — Orquestación con Airflow
-- [ ] Fase 5 — Dashboard con Streamlit
+- [x] Fase 4 — Orquestación con Airflow
+- [x] Fase 5 — Dashboard con Streamlit
 
 ## Cómo ejecutar la extracción
 
@@ -92,13 +92,32 @@ SELECT agency_id, agency_name FROM raw.agency;
 
 ```bash
 cd dbt/sevilla_transit
-pip install dbt-postgres
+pip install dbt-core==1.8.2 dbt-postgres==1.8.2
 export DBT_PROFILES_DIR=$(pwd)   # en Windows (PowerShell): $env:DBT_PROFILES_DIR = (Get-Location)
 
 dbt debug     # comprueba la conexión a Postgres
 dbt run       # construye los modelos
 dbt test      # ejecuta los tests
 ```
+
+> **Nota**: se fijan las dos versiones (`dbt-core` y `dbt-postgres`) explícitamente, no solo `dbt-postgres`. dbt Labs publicó un nuevo motor ("dbt Fusion", en Rust) bajo el mismo paquete `dbt-core` en versiones 2.x, que todavía no soporta el adaptador de Postgres — sin fijar también `dbt-core`, `pip install dbt-postgres` puede arrastrar esa versión nueva incompatible. Ver el detalle en Decisiones técnicas, Fase 4.
+
+## Cómo ejecutar Airflow
+
+```bash
+docker-compose up -d --build airflow-init      # una sola vez: prepara la BD de metadatos
+docker-compose up -d airflow-webserver airflow-scheduler
+```
+
+Abre http://localhost:8080 (usuario `admin`, contraseña `admin`), activa el DAG `sevilla_transit_pipeline` y dispáralo manualmente con el botón ▶ para probarlo, o espera a su ejecución programada diaria (06:00).
+
+## Cómo ejecutar el dashboard
+
+```bash
+docker-compose up -d --build streamlit
+```
+
+Abre http://localhost:8501. Necesita que el pipeline se haya ejecutado al menos una vez (para que `mart_frecuencia_por_parada` tenga datos) — si no, el dashboard lo indica con un aviso claro en vez de fallar en silencio.
 
 ## Decisiones técnicas
 
@@ -131,7 +150,10 @@ pandas podría inferir tipos automáticamente (`route_short_name` como int, por 
 Por defecto, `load_staging.py` lista las particiones `dt=` disponibles en S3 y coge la más reciente, sin necesidad de pasarle una fecha. Esto es importante para la Fase 4: cuando Airflow orqueste `extract → load`, el DAG no necesita coordinar explícitamente qué fecha acaba de extraer el paso anterior — `load_staging.py` simplemente coge "lo último que haya", lo cual simplifica el grafo de dependencias. La opción `--date` se mantiene para reprocesar un día histórico concreto sin tocar el resto.
 
 **Full refresh en `raw`, histórico real vive en S3.**
-Cada ejecución de `load_staging.py` reemplaza el contenido de las tablas `raw.*` (`if_exists='replace'`). Postgres `raw` es solo la copia de trabajo más reciente para transformar — el histórico día a día ya está garantizado por el particionado de S3 (Fase 1). Si en el futuro se necesitara histórico también dentro del warehouse (por ejemplo, para detectar cuándo cambió el horario de una línea), se añadiría con snapshots de dbt, que es la herramienta pensada para eso, no repitiendo la lógica en Python.
+Cada ejecución de `load_staging.py` reemplaza el contenido de las tablas `raw.*`. Postgres `raw` es solo la copia de trabajo más reciente para transformar — el histórico día a día ya está garantizado por el particionado de S3 (Fase 1). Si en el futuro se necesitara histórico también dentro del warehouse (por ejemplo, para detectar cuándo cambió el horario de una línea), se añadiría con snapshots de dbt, que es la herramienta pensada para eso, no repitiendo la lógica en Python.
+
+**`DROP ... CASCADE` explícito, no `if_exists='replace'` de pandas.**
+Una vez que dbt crea sus vistas de staging (`staging.stg_stops`, etc.) sobre las tablas `raw.*`, un `replace` simple de pandas falla: Postgres se niega a hacer `DROP TABLE raw.stops` mientras exista una vista que dependa de ella (error `DependentObjectsStillExist`). La solución es un `DROP TABLE ... CASCADE` explícito antes de recrear la tabla — arrastra también las vistas dependientes (incluso en cadena, hasta los modelos intermedios). Esto es coherente con el pipeline tal y como está diseñado: el siguiente paso del DAG de Airflow, justo después de `load_staging`, es `dbt run`, que reconstruye esas vistas desde cero de todas formas. Es la misma filosofía de "full refresh" aplicada de forma consistente: si `raw` cambia, todo lo que depende de `raw` se recalcula entero, nunca se actualiza a medias.
 
 ### Fase 3 — dbt (en curso)
 
@@ -162,6 +184,58 @@ Un `service_id` de GTFS puede operar varios días de la semana a la vez (p. ej. 
 **Validación end-to-end con datos sintéticos antes de ejecutarlo contra datos reales.**
 Antes de dar por bueno el modelo, se construyó una base de datos Postgres efímera con un puñado de filas sintéticas que cubrían deliberadamente los casos límite: una hora por encima de 24h, una parada sin ningún paso de autobús (para comprobar que desaparece del resultado), y una línea de otra provincia (para comprobar que el filtro a `CTMAS` la excluye en toda la cadena). Los 11 modelos y 50 tests se ejecutaron correctamente contra esos datos antes de aplicarlo al feed real — una práctica de ingeniería de software (probar con casos límite conocidos) aplicada a un pipeline de datos.
 
+**Coordenadas vacías en el feed real: `NULLIF` antes de castear, y exclusión explícita.**
+Los datos sintéticos no cubrían un caso que sí apareció en el feed real de CTAN: algunas paradas traen `stop_lat`/`stop_lon` como cadena de texto vacía (`""`), no ausente del todo. Como la Fase 2 carga todo como texto sin convertir vacíos a nulo (a propósito, para no perder información en la carga), el cast directo a `numeric` en `stg_stops` reventaba con un error de sintaxis antes de que el test `not_null` llegara a evaluarlo. La solución: `NULLIF(stop_lat, '')::numeric` convierte el vacío en `NULL` de verdad antes de castear, y el modelo excluye explícitamente las paradas sin coordenadas — no pueden situarse en el mapa de cobertura, que es el objetivo final del proyecto. El test `not_null` se mantiene como red de seguridad: tras el filtro debería pasar siempre, y si un día vuelve a fallar, es la señal de que el filtro se ha roto, no de que hayan aparecido coordenadas nuevas sin tratar.
+
+### Fase 4 — Airflow
+
+**Base de datos de metadatos de Airflow separada del warehouse.**
+`airflow-postgres` es una instancia de Postgres distinta a la que usa el proyecto como warehouse (`postgres`). Airflow necesita guardar su propio estado interno (qué DAGs existen, qué ejecuciones ha habido, logs...) — mezclarlo con los esquemas `raw`/`staging`/`marts` del proyecto acoplaría dos cosas que no tienen relación conceptual entre sí, y complicaría un backup o una migración del warehouse el día de mañana.
+
+**`catchup=False`: no se recuperan ejecuciones perdidas.**
+Esto conecta directamente con una limitación real de ejecutar Airflow en un portátil que no está siempre encendido: si el scheduler lleva 3 días parado, `catchup=True` haría que, al arrancar, Airflow lanzara 3 ejecuciones seguidas (una por cada día "perdido"). Para este pipeline no tiene sentido: cada ejecución descarga *el estado actual* del feed de CTAN, no un dato histórico de un día concreto — "recuperar" el día de ayer significaría simplemente descargar el feed de hoy con la fecha de ayer en la partición de S3, lo cual sería incorrecto. Con `catchup=False`, Airflow simplemente retoma desde la próxima ejecución programada.
+
+**Las tareas del DAG no reimplementan lógica, solo orquestan.**
+Cada tarea (`extract_gtfs`, `load_staging`, `dbt_run`, `dbt_test`) es un `BashOperator` que ejecuta exactamente el mismo comando que ya usas a mano. Esto es deliberado: si una tarea falla en Airflow, se puede reproducir el fallo ejecutando el mismo comando manualmente, sin tener que entender ninguna capa de abstracción extra de Airflow — el DAG es solo el "pegamento" que decide el orden y qué hacer si algo falla.
+
+**Overrides de red explícitos para el contexto Docker.**
+El `.env` compartido usa `POSTGRES_HOST=localhost` y `POSTGRES_PORT=5433` porque está pensado para ejecutar los scripts desde tu Windows, fuera de Docker. Dentro de la red de contenedores, los servicios se alcanzan por su nombre (`postgres`, `minio`) **y por su puerto interno real** (`5432` para Postgres, no el `5433` republicado hacia el host — ese mapeo de puerto solo existe de cara a Windows, la red interna de Docker nunca lo ve). En vez de mantener un `.env` duplicado, `docker-compose.yml` sobrescribe explícitamente `POSTGRES_HOST`, `POSTGRES_PORT` y `S3_ENDPOINT_URL` a nivel de servicio (`environment:`), y reutiliza el resto de la configuración (contraseñas, nombres de bucket) del mismo `.env` de siempre vía `env_file:`. Una única fuente de verdad para los secretos, con overrides explícitos solo donde el contexto de ejecución realmente cambia.
+
+**Imagen Docker propia para Airflow, en vez de instalar dependencias en cada ejecución.**
+`airflow/Dockerfile` parte de la imagen oficial de Airflow y le instala de una vez las dependencias de `extract_gtfs.py`, `load_staging.py` y `dbt-postgres`. La alternativa (instalar con `pip` dentro del propio `BashOperator`, en cada ejecución) funcionaría pero sería mucho más lento y menos reproducible — cada ejecución del DAG dependería de que PyPI esté disponible en ese momento.
+
+**Las dependencias del proyecto viven en un entorno virtual aislado, no en el Python de Airflow.**
+Al instalar `boto3`, `pandas` y `dbt-postgres` directamente en el mismo Python que usa Airflow, apareció un conflicto real: nuestro `load/requirements.txt` fija `SQLAlchemy==2.0.32`, pero Airflow 2.9 necesita internamente `SQLAlchemy <2.0` — la versión más nueva rompía el arranque del propio `webserver` y `scheduler` (error `ArgumentError` en los modelos ORM internos de Airflow). La solución: crear un entorno virtual aparte (`/opt/project_venv`) dentro de la misma imagen, con las dependencias del proyecto completamente aisladas de las de Airflow. Las tareas del DAG invocan explícitamente `/opt/project_venv/bin/python` y `/opt/project_venv/bin/dbt`, no el `python`/`dbt` que estaría en el `PATH` por defecto. Esto también es más robusto a futuro: actualizar `dbt` o `pandas` en el proyecto ya no puede volver a romper Airflow, porque nunca comparten el mismo entorno.
+
+**`dbt-core` fijado explícitamente, no solo `dbt-postgres`.**
+`pip install dbt-postgres==1.8.2` por sí solo instaló, inesperadamente, `dbt-core 2.0.0-alpha` — la primera versión pública de **dbt Fusion**, un motor nuevo de dbt Labs reescrito en Rust, que en esta versión alpha todavía no soporta el adaptador de Postgres (error `InvalidConfig`, "adapter is not yet supported by dbt Fusion"). La causa: la versión `dbt-postgres==1.8.2` no fija un límite superior para su dependencia de `dbt-core`, así que `pip` resuelve a la versión más reciente disponible — que hoy es la 2.0 alpha, no la línea clásica 1.x. La solución es fijar **ambos** paquetes (`dbt-core==1.8.2` y `dbt-postgres==1.8.2`) a la misma versión clásica explícitamente, tanto en la imagen Docker de Airflow como en las instrucciones de instalación local. Es un buen recordatorio de por qué fijar versiones exactas en un proyecto reproducible importa incluso para dependencias "de segundo grado" que uno no instala directamente.
+
+### Fase 5 — Dashboard
+
+**El dashboard no calcula nada, solo visualiza.**
+`app.py` lee directamente de `mart_frecuencia_por_parada` — la tabla que dbt ya deja calculada — y no reimplementa ningún filtro ni agregación de negocio. Es la misma separación de responsabilidades que ya aplicamos entre Python y dbt en la Fase 2: la lógica de negocio vive en un único sitio (los modelos dbt), no se duplica en la capa de presentación. Si mañana cambia la definición de "peor comunicada", se cambia el modelo SQL, no el dashboard.
+
+**Mapa con `open-street-map`, sin token de Mapbox.**
+Plotly permite mapas interactivos sin necesidad de una cuenta de Mapbox (que requeriría gestionar otra clave de API más). Es la misma filosofía que MinIO/Postgres: todo el proyecto debe poder clonarse y ejecutarse sin depender de ninguna cuenta externa que pueda caducar o requerir configuración adicional.
+
+**`scatter_mapbox`, no `scatter_map`, a pesar del aviso de "deprecated".**
+Plotly introdujo `scatter_map` (basado en MapLibre) como reemplazo moderno de `scatter_mapbox` (basado en Mapbox GL). En pruebas locales, `scatter_map` compilaba sin errores en Python — pero al renderizarse en el navegador dentro de Streamlit, el mapa aparecía en blanco (solo ejes numéricos genéricos, sin el mapa de fondo). Se probó `scatter_mapbox` como alternativa, pero mostró exactamente el mismo fallo — señal de que el problema no era la traza concreta, sino que el navegador no cargaba correctamente la librería externa de mapas (Mapbox GL / MapLibre) que Plotly necesita, probablemente por un bloqueo de red hacia su CDN.
+
+**Se sustituyó Plotly por `st.map` (el componente de mapa nativo de Streamlit, basado en pydeck/deck.gl) para el mapa de cobertura.**
+En vez de seguir depurando una librería externa cargada por CDN, se optó por el componente de mapa integrado en el propio Streamlit, que usa teselas de Carto (gratuitas, sin API key para uso básico) y no depende de cargar Mapbox GL/MapLibre por separado en el navegador — mucho menos propenso a este tipo de fallo silencioso. Como `st.map` no ofrece una escala de color continua incorporada (solo acepta una columna con colores ya calculados en hexadecimal), se añadió una función propia (`frequency_to_hex_color`) que genera el color rojo→amarillo→verde manualmente. Se pierde el tooltip interactivo con detalles al pasar el ratón (limitación de `st.map` frente a Plotly), compensado con la tabla de ranking justo debajo, que ya muestra esos datos en detalle.
+
+**El techo de la escala de color es un umbral fijo y ajustable, no el máximo del propio dataset.**
+La primera versión normalizaba el color entre el mínimo y el máximo de `buses_por_hora` dentro del conjunto filtrado. Esto tenía un problema real, detectado al ver el mapa: la estación de intercambio de Plaza de Armas (un hub con muchísima más frecuencia que cualquier parada normal) actuaba como el extremo "verde" de la escala, lo que empujaba a prácticamente todas las demás paradas hacia el rojo *por comparación*, aunque tuvieran una frecuencia perfectamente razonable en términos absolutos. Además, como el mínimo y máximo se recalculaban por separado en cada vista, los colores de "laborable" y "fin de semana" ni siquiera eran comparables entre sí. La solución: un umbral fijo, controlable con un slider en el propio dashboard, y con recorte (*clip*) de cualquier valor por encima de ese umbral al verde máximo — así un outlier extremo no puede volver a estirar la escala.
+
+**El umbral por defecto se calcula con el percentil 90 real de los datos, no con un número inventado.**
+Tras ver el mapa con un umbral fijo puesto a ojo, seguía viéndose "casi todo rojo" — la elección inicial había sido una suposición razonable pero sin verificar contra los datos reales. Se añadió una sección de "Distribución de frecuencias" (percentiles + histograma) para inspeccionar la forma real de los datos antes de fijar el umbral, y el valor por defecto del slider pasó a calcularse dinámicamente como el percentil 90 de `buses_por_hora` sobre el conjunto completo (laborable + fin de semana combinados, para no romper la comparabilidad entre vistas). Con un umbral basado en percentiles, el 90% de las paradas se reparte por todo el degradado rojo-verde en vez de agruparse en el extremo rojo por comparación con un único hub extremo.
+
+**`app.py` montado como volumen en Docker, no copiado en el build.**
+La primera versión de `dashboard/Dockerfile` usaba `COPY app.py .`, que "hornea" el código dentro de la imagen en el momento de construirla. Esto causó un problema real durante el desarrollo: cambios en `app.py` no se reflejaban al recrear el contenedor (`docker-compose up -d streamlit`), porque seguía usando la imagen vieja con el código viejo — hacía falta reconstruir la imagen entera (`--build`) para cada cambio, incluso los más pequeños. Se corrigió montando `app.py` como volumen (`./dashboard/app.py:/app/app.py`), igual que ya se hacía con el proyecto completo en Airflow — así los cambios de código se reflejan de inmediato sin reconstruir nada, y Streamlit incluso recarga en caliente al detectar el cambio.
+
+**Streamlit dockerizado, coherente con el resto del stack.**
+Aunque Streamlit se puede lanzar directamente con `streamlit run app.py` sin Docker, se dockerizó igual que el resto de servicios para mantener la promesa central del proyecto: todo el pipeline (extracción, carga, transformación, orquestación y visualización) se levanta con un único `docker-compose up`, sin pasos manuales adicionales fuera de Docker.
+
 ## Autor
 
-[Javier Rodríguez Cordero] — Ingeniero de Software · Máster en Inteligencia Artificial
+Javier Rodríguez Cordero — Ingeniero de Software · Máster en Inteligencia Artificial
