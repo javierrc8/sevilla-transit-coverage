@@ -17,8 +17,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: ['CTMAS']
+              values: ['CTMAS']
 
       - name: route_type
         description: >
@@ -29,8 +28,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: [3]
+              values: [3]
 
   - name: stg_trips
     description: Viajes concretos de las líneas de Sevilla, uno por salida programada.
@@ -44,9 +42,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('stg_routes')
-                field: route_id
+              to: ref('stg_routes')
+              field: route_id
       - name: service_id
         tests:
           - not_null
@@ -61,16 +58,14 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('stg_trips')
-                field: trip_id
+              to: ref('stg_trips')
+              field: trip_id
       - name: stop_id
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('stg_stops')
-                field: stop_id
+              to: ref('stg_stops')
+              field: stop_id
       - name: stop_sequence
         tests:
           - not_null

@@ -40,22 +40,19 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('dim_paradas')
-                field: stop_id
+              to: ref('dim_paradas')
+              field: stop_id
       - name: route_id
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('dim_lineas')
-                field: route_id
+              to: ref('dim_lineas')
+              field: route_id
       - name: day_type
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: ['laborable', 'fin_de_semana']
+              values: ['laborable', 'fin_de_semana']
 
   - name: mart_frecuencia_por_parada
     description: >
@@ -69,8 +66,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: ['laborable', 'fin_de_semana']
+              values: ['laborable', 'fin_de_semana']
       - name: buses_por_hora
         description: >
           Métrica principal: pasadas_totales / horas_con_servicio_activo.
