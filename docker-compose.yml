@@ -150,6 +150,7 @@ services:
       # caliente al detectar el cambio del fichero, sin ni siquiera
       # reiniciar el contenedor en muchos casos.
       - ./dashboard/app.py:/app/app.py
+      - ./.streamlit/config.toml:/app/.streamlit/config.toml
     environment:
       # Mismo razonamiento que en Airflow: dentro de la red de Docker,
       # Postgres se alcanza por su nombre de servicio y su puerto interno

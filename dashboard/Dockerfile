@@ -6,6 +6,7 @@ COPY dashboard/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dashboard/app.py .
+COPY .streamlit/ .streamlit/
 
 EXPOSE 8501
 

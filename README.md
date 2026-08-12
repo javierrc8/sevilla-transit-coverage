@@ -257,6 +257,23 @@ Las credenciales usadas (`minioadmin`/`minioadmin`, contraseña de Postgres) son
 **Limitación asumida: sin persistencia entre ejecuciones.**
 Cada ejecución del workflow levanta Postgres y MinIO efímeros desde cero — los datos no se acumulan de un día a otro dentro de GitHub Actions. El objetivo de este workflow es demostrar que la automatización diaria funciona de verdad, no sustituir a un warehouse persistente en la nube (eso exigiría una cuenta cloud real, justo lo que el proyecto evita a propósito). En un entorno de producción real, este mismo workflow apuntaría a infraestructura persistente (RDS, S3 real) en vez de contenedores efímeros.
 
+### Diseño visual del dashboard
+
+**Sistema de diseño explícito, no estilos sueltos.**
+Antes de tocar CSS se definió una paleta con nombre (fondo, superficie, borde, texto primario/secundario, acento), una pareja tipográfica (pila de fuentes de sistema para texto, monoespaciada para cifras) y un layout concreto — igual que se define un esquema en estrella antes de escribir el primer modelo dbt. Evita ir añadiendo colores y tamaños de fuente sueltos según hace falta, que es como se acaba con una interfaz inconsistente.
+
+**Fuentes de sistema, no cargadas por CDN.**
+Se usa la pila `-apple-system, BlinkMacSystemFont, 'Segoe UI', ...` en vez de importar una tipografía de Google Fonts u otro CDN externo. Dos motivos: evita repetir el mismo tipo de fallo silencioso que ya se dio con Mapbox/MapLibre (una librería externa que el navegador no carga bien, sin aviso claro de qué ha pasado), y además consigue que la tipografía real de Apple se vea en Mac, con `Segoe UI` como equivalente igual de cuidado en Windows — sin depender de que ningún servidor externo esté disponible.
+
+**Colores semánticos de Apple (HIG) para la escala del mapa, no un rojo-verde genérico.**
+El degradado de frecuencia usa los colores de sistema exactos de Apple (`systemRed #FF3B30`, `systemOrange #FF9500`, `systemGreen #34C759`) en vez de un rojo-amarillo-verde inventado. Es un detalle pequeño, pero coherente con pedir una interfaz "al estilo Apple": hasta el color de un punto en el mapa remite al mismo lenguaje visual.
+
+**`st.empty()` para separar el orden de cálculo del orden visual.**
+La ficha técnica (KPIs) y el mapa se renderizan arriba, pero sus valores dependen de los controles (tipo de día, umbral), que visualmente están más abajo. Se resuelve reservando el hueco arriba con `st.empty()` y rellenándolo más tarde en el propio script, una vez leídos los controles — Streamlit ejecuta el script de arriba a abajo en cada interacción, pero un *placeholder* puede recibir contenido en cualquier punto posterior del código sin mover su posición visual.
+
+**Markup HTML propio para los KPIs, no `st.metric` con CSS forzado por encima.**
+`st.metric` es cómodo pero limita el control visual real (fuente, alineación, separadores verticales entre métricas). Para el elemento "de firma" del diseño (la ficha técnica con cifras grandes tipo especificación de producto) se construyó markup HTML propio vía `st.markdown(..., unsafe_allow_html=True)`, apoyado en las clases CSS ya definidas — más robusto que intentar sobrescribir con `!important` los estilos internos de un componente nativo cuyas clases pueden cambiar entre versiones de Streamlit.
+
 ## Autor
 
 Javier Rodríguez Cordero — Ingeniero de Software · Máster en Inteligencia Artificial
