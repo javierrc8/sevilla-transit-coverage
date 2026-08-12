@@ -1,0 +1,97 @@
+<svg viewBox="0 0 1200 460" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#6E6E73" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="460" fill="#FBFBFD" />
+
+  <!-- Etiqueta de orquestación -->
+  <rect x="24" y="24" width="1152" height="36" rx="8" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1" />
+  <text x="600" y="47" text-anchor="middle" font-size="13" font-weight="600" letter-spacing="0.04em" fill="#0071E3">
+    ORQUESTADO A DIARIO POR AIRFLOW · RESPALDO EN GITHUB ACTIONS
+  </text>
+
+  <!-- Fila 1: capa raw -->
+  <!-- CTAN API -->
+  <rect x="24" y="100" width="180" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="114" y="138" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">API de CTAN</text>
+  <text x="114" y="158" text-anchor="middle" font-size="12" fill="#6E6E73">Feed GTFS diario</text>
+
+  <line x1="204" y1="145" x2="248" y2="145" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- Extract -->
+  <rect x="252" y="100" width="180" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="342" y="132" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">Extracción</text>
+  <text x="342" y="152" text-anchor="middle" font-size="12" fill="#6E6E73">Python</text>
+  <text x="342" y="168" text-anchor="middle" font-size="12" fill="#6E6E73">extract_gtfs.py</text>
+
+  <line x1="432" y1="145" x2="476" y2="145" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- S3/MinIO -->
+  <rect x="480" y="100" width="180" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="570" y="132" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">Raw layer</text>
+  <text x="570" y="152" text-anchor="middle" font-size="12" fill="#6E6E73">S3 / MinIO</text>
+  <text x="570" y="168" text-anchor="middle" font-size="12" fill="#6E6E73">particionado por fecha</text>
+
+  <line x1="660" y1="145" x2="704" y2="145" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- Load -->
+  <rect x="708" y="100" width="180" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="798" y="132" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">Carga</text>
+  <text x="798" y="152" text-anchor="middle" font-size="12" fill="#6E6E73">Python</text>
+  <text x="798" y="168" text-anchor="middle" font-size="12" fill="#6E6E73">load_staging.py</text>
+
+  <line x1="888" y1="145" x2="932" y2="145" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- Postgres raw -->
+  <rect x="936" y="100" width="240" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="1056" y="132" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">Postgres</text>
+  <text x="1056" y="152" text-anchor="middle" font-size="12" fill="#6E6E73">esquema raw</text>
+  <text x="1056" y="168" text-anchor="middle" font-size="12" fill="#6E6E73">sustituto local de Snowflake</text>
+
+  <!-- Conector vertical hacia la fila 2 -->
+  <line x1="1056" y1="190" x2="1056" y2="220" stroke="#6E6E73" stroke-width="1.5" />
+  <line x1="1056" y1="220" x2="342" y2="220" stroke="#6E6E73" stroke-width="1.5" />
+  <line x1="342" y1="220" x2="342" y2="264" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- Fila 2: transformación y consumo -->
+  <!-- dbt staging -->
+  <rect x="252" y="268" width="180" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="342" y="300" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">dbt · staging</text>
+  <text x="342" y="320" text-anchor="middle" font-size="12" fill="#6E6E73">tipado + filtro CTMAS</text>
+  <text x="342" y="336" text-anchor="middle" font-size="12" fill="#6E6E73">5 modelos</text>
+
+  <line x1="432" y1="313" x2="476" y2="313" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- dbt marts (dims + fact) -->
+  <rect x="480" y="268" width="240" height="90" rx="14" fill="#FFFFFF" stroke="#D2D2D7" stroke-width="1.5" />
+  <text x="600" y="296" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">dbt · esquema en estrella</text>
+  <text x="600" y="316" text-anchor="middle" font-size="12" fill="#6E6E73">3 dimensiones + 1 hecho</text>
+  <text x="600" y="332" text-anchor="middle" font-size="12" fill="#6E6E73">50 tests automáticos</text>
+
+  <line x1="720" y1="313" x2="764" y2="313" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- mart final -->
+  <rect x="768" y="268" width="200" height="90" rx="14" fill="#FFFFFF" stroke="#0071E3" stroke-width="1.5" />
+  <text x="868" y="300" text-anchor="middle" font-size="15" font-weight="600" fill="#1D1D1F">mart_frecuencia</text>
+  <text x="868" y="320" text-anchor="middle" font-size="12" fill="#6E6E73">_por_parada</text>
+  <text x="868" y="340" text-anchor="middle" font-size="11" fill="#0071E3" font-weight="600">buses/hora, laborable vs finde</text>
+
+  <line x1="968" y1="313" x2="1012" y2="313" stroke="#6E6E73" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- Streamlit -->
+  <rect x="1016" y="268" width="160" height="90" rx="14" fill="#1D1D1F" stroke="#1D1D1F" stroke-width="1.5" />
+  <text x="1096" y="300" text-anchor="middle" font-size="15" font-weight="600" fill="#FFFFFF">Dashboard</text>
+  <text x="1096" y="320" text-anchor="middle" font-size="12" fill="#D2D2D7">Streamlit</text>
+  <text x="1096" y="336" text-anchor="middle" font-size="12" fill="#D2D2D7">mapa + ranking</text>
+
+  <!-- Nota inferior -->
+  <text x="24" y="410" font-size="12" fill="#6E6E73">
+    Todo el pipeline corre en local con Docker Compose. Sin cuentas cloud reales: MinIO sustituye a S3, Postgres sustituye a Snowflake.
+  </text>
+  <text x="24" y="430" font-size="12" fill="#6E6E73">
+    GitHub Actions ejecuta la misma secuencia a diario sobre infraestructura efímera, como respaldo si el equipo local está apagado.
+  </text>
+</svg>

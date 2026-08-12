@@ -6,7 +6,13 @@ Pipeline de datos end-to-end que analiza la cobertura y frecuencia de la **red i
 
 ## Estado del proyecto
 
-🚧 En construcción — ver [progreso por fases](#roadmap) más abajo.
+Completo — pipeline funcionando de extremo a extremo, con orquestación diaria y dashboard interactivo. Ver el [detalle por fases](#roadmap) más abajo.
+
+## Vista previa
+
+![Mapa de cobertura del dashboard](docs/dashboard-map.png)
+
+*Mapa de frecuencia por parada: el color indica los buses por hora, el tamaño el volumen de servicio. Umbral y tipo de día ajustables desde la propia interfaz.*
 
 ## Por qué este proyecto
 
@@ -16,14 +22,7 @@ Pipeline de datos end-to-end que analiza la cobertura y frecuencia de la **red i
 
 ## Arquitectura
 
-```
-Python (extract del ZIP GTFS vía API de CTAN)
-  → S3 (raw, sin transformar)
-  → Data Warehouse (staging)
-  → dbt (staging → intermediate → marts, esquema en estrella)
-  → Airflow (orquesta el pipeline diario, con reintentos)
-  → Streamlit (dashboard final: mapa de frecuencia por parada)
-```
+![Diagrama de arquitectura del pipeline](docs/architecture.svg)
 
 > Nota de diseño: para que el proyecto sea ejecutable de forma indefinida (portfolio público, sin depender de trials de cloud que caducan), el pipeline corre localmente con Docker usando Postgres como data warehouse y MinIO como almacenamiento S3-compatible. El código está pensado para ser portable a Snowflake/S3 real en un entorno de producción — se detalla en la sección de [Decisiones técnicas](#decisiones-técnicas).
 
@@ -277,3 +276,7 @@ La ficha técnica (KPIs) y el mapa se renderizan arriba, pero sus valores depend
 ## Autor
 
 Javier Rodríguez Cordero — Ingeniero de Software · Máster en Inteligencia Artificial
+
+## Licencia
+
+Distribuido bajo licencia [MIT](LICENSE).
