@@ -1,0 +1,121 @@
+name: Daily GTFS pipeline
+
+# Este workflow existe para resolver un problema concreto: Airflow (Fase 4)
+# solo dispara tareas programadas si su scheduler está corriendo en ese
+# instante — y un portátil que se apaga por la noche no puede garantizarlo.
+# GitHub Actions ofrece runners gratuitos y siempre disponibles: en vez de
+# sustituir a Airflow, este workflow reutiliza EXACTAMENTE la misma
+# secuencia de comandos que ya orquesta el DAG (extract → load → dbt run
+# → dbt test), pero disparada por un cron que no depende de que ningún
+# ordenador concreto esté encendido.
+#
+# Limitación conocida y asumida: cada ejecución levanta Postgres y MinIO
+# efímeros dentro del propio runner. No hay persistencia entre ejecuciones
+# (los datos no "se acumulan" de un día a otro aquí) — el objetivo de este
+# workflow es demostrar que la automatización funciona de verdad todos los
+# días, no sustituir a un warehouse persistente en la nube (eso requeriría
+# una cuenta cloud real, que es precisamente lo que el proyecto evita a
+# propósito para poder ejecutarse sin depender de ninguna cuenta externa).
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC todos los días
+  workflow_dispatch: {} # permite lanzarlo a mano desde la pestaña Actions de GitHub
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    services:
+      # La imagen oficial de Postgres arranca correctamente sin argumentos
+      # extra, así que sí puede declararse como "service" normal.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sevilla
+          POSTGRES_PASSWORD: sevilla
+          POSTGRES_DB: sevilla_transit
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sevilla"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Sin secretos de GitHub: son credenciales de un MinIO efímero que
+      # vive y muere dentro de esta misma ejecución, nunca expuesto a
+      # nada externo. Coherente con la filosofía del proyecto: cero
+      # cuentas externas necesarias para ejecutarlo.
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: sevilla
+      POSTGRES_PASSWORD: sevilla
+      POSTGRES_DB: sevilla_transit
+      S3_ENDPOINT_URL: http://localhost:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: eu-west-1
+      S3_BUCKET_NAME: sevilla-transit-raw
+      S3_RAW_PREFIX: raw/gtfs
+      CTAN_GTFS_URL: https://api.ctan.es/v1/datos/UNIFICADO/gtfs.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Arrancar MinIO manualmente
+        # No se usa la sintaxis "services:" de GitHub Actions porque no
+        # permite pasar el comando "server /data" que la imagen de MinIO
+        # necesita para arrancar (con "services:" solo se puede fijar la
+        # imagen y variables de entorno, no el comando). Se lanza como un
+        # contenedor Docker normal, con control total del comando.
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+
+          echo "Esperando a que MinIO esté listo..."
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:9000/minio/health/live > /dev/null; then
+              echo "MinIO listo."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO no respondió a tiempo."
+          docker logs minio
+          exit 1
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r extract/requirements.txt
+          pip install -r load/requirements.txt
+          pip install dbt-core==1.8.2 dbt-postgres==1.8.2
+
+      - name: Extract (CTAN API -> MinIO)
+        working-directory: extract
+        run: python extract_gtfs.py
+
+      - name: Load (MinIO -> Postgres raw)
+        working-directory: load
+        run: python load_staging.py
+
+      - name: dbt run
+        working-directory: dbt/sevilla_transit
+        env:
+          DBT_PROFILES_DIR: .
+        run: dbt run
+
+      - name: dbt test
+        working-directory: dbt/sevilla_transit
+        env:
+          DBT_PROFILES_DIR: .
+        run: dbt test

@@ -56,6 +56,7 @@ docker-compose up -d
 - [x] Fase 3 — Modelado dbt (staging → marts)
 - [x] Fase 4 — Orquestación con Airflow
 - [x] Fase 5 — Dashboard con Streamlit
+- [x] Ejecución diaria automática vía GitHub Actions
 
 ## Cómo ejecutar la extracción
 
@@ -118,6 +119,12 @@ docker-compose up -d --build streamlit
 ```
 
 Abre http://localhost:8501. Necesita que el pipeline se haya ejecutado al menos una vez (para que `mart_frecuencia_por_parada` tenga datos) — si no, el dashboard lo indica con un aviso claro en vez de fallar en silencio.
+
+## Ejecución automática diaria (sin depender de tu portátil)
+
+Airflow (Fase 4) solo dispara sus tareas programadas si su `scheduler` está corriendo en ese momento — si tu ordenador está apagado, esa ejecución simplemente no ocurre. Para que el pipeline se ejecute de verdad todos los días sin depender de que tu máquina esté encendida, `.github/workflows/daily_pipeline.yml` reutiliza exactamente la misma secuencia de comandos (`extract → load → dbt run → dbt test`) disparada por un cron en GitHub Actions, sobre infraestructura efímera y gratuita (no sustituye a Airflow, lo complementa).
+
+Se activa solo con hacer push del repo a GitHub — no requiere configuración adicional. También puedes lanzarlo manualmente desde la pestaña **Actions** del repositorio, botón "Run workflow", sin esperar al cron.
 
 ## Decisiones técnicas
 
@@ -235,6 +242,20 @@ La primera versión de `dashboard/Dockerfile` usaba `COPY app.py .`, que "hornea
 
 **Streamlit dockerizado, coherente con el resto del stack.**
 Aunque Streamlit se puede lanzar directamente con `streamlit run app.py` sin Docker, se dockerizó igual que el resto de servicios para mantener la promesa central del proyecto: todo el pipeline (extracción, carga, transformación, orquestación y visualización) se levanta con un único `docker-compose up`, sin pasos manuales adicionales fuera de Docker.
+
+### GitHub Actions — ejecución diaria sin depender de un ordenador encendido
+
+**Complementa a Airflow, no lo sustituye.**
+Airflow demuestra la habilidad de orquestar (dependencias entre tareas, reintentos, configuración de scheduling) — eso no cambia. Pero su `scheduler` necesita estar corriendo en el instante exacto de cada ejecución programada, y un portátil que se apaga por la noche no lo garantiza. GitHub Actions aporta un runner gratuito y siempre disponible como disparador real, reutilizando literalmente los mismos comandos que ya ejecuta el DAG — el workflow no reimplementa ninguna lógica nueva, solo la dispara desde otro sitio.
+
+**MinIO no se declara como `services:` de GitHub Actions — se lanza manualmente con `docker run`.**
+La sintaxis `services:` de GitHub Actions permite fijar la imagen y las variables de entorno de un contenedor auxiliar, pero no pasarle un comando de arranque personalizado. La imagen oficial de Postgres arranca sola sin argumentos extra, así que sí funciona como `service` — pero la de MinIO necesita explícitamente `server /data` como argumento, o solo imprime la ayuda y no levanta el servidor. La solución: lanzar MinIO como un contenedor Docker normal en un paso del job, con control total del comando, y esperar activamente a que su endpoint de salud responda antes de continuar.
+
+**Sin secretos de GitHub Actions.**
+Las credenciales usadas (`minioadmin`/`minioadmin`, contraseña de Postgres) son de infraestructura efímera que nace y muere dentro de la propia ejecución del workflow — nunca queda expuesta a nada externo. Es coherente con la filosofía de todo el proyecto: cero cuentas ni credenciales externas necesarias para ejecutarlo, ni siquiera en CI.
+
+**Limitación asumida: sin persistencia entre ejecuciones.**
+Cada ejecución del workflow levanta Postgres y MinIO efímeros desde cero — los datos no se acumulan de un día a otro dentro de GitHub Actions. El objetivo de este workflow es demostrar que la automatización diaria funciona de verdad, no sustituir a un warehouse persistente en la nube (eso exigiría una cuenta cloud real, justo lo que el proyecto evita a propósito). En un entorno de producción real, este mismo workflow apuntaría a infraestructura persistente (RDS, S3 real) en vez de contenedores efímeros.
 
 ## Autor
 
